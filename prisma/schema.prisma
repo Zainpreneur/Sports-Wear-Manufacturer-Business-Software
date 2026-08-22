@@ -1,0 +1,195 @@
+// Sports Wear Manufacturer — Business Management System
+// Prisma schema (SQLite for local/dev; swap the datasource + adapter for Postgres in production)
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ---------------------------------------------------------------------------
+// NOTE: SQLite has no native enum type, so status/role/category fields below
+// are plain Strings. Allowed values are enforced in application code — see
+// `src/lib/constants.ts` for the canonical lists and TypeScript union types.
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("STAFF") // ADMIN | MANAGER | STAFF
+  department   String? // e.g. Production, Sales, Warehouse, Design
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Customer {
+  id        String       @id @default(cuid())
+  name      String
+  company   String?
+  email     String?
+  phone     String?
+  address   String?
+  city      String?
+  country   String?
+  notes     String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  orders    SalesOrder[]
+}
+
+model Supplier {
+  id          String        @id @default(cuid())
+  name        String
+  contactName String?
+  email       String?
+  phone       String?
+  address     String?
+  country     String?
+  notes       String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  materials   RawMaterial[]
+}
+
+model RawMaterial {
+  id           String    @id @default(cuid())
+  name         String
+  sku          String    @unique
+  category     String // Fabric, Thread, Zipper, Label, Packaging, Dye, Trim
+  unit         String // meters, kg, pcs, rolls
+  stockQty     Float     @default(0)
+  reorderLevel Float     @default(0)
+  costPerUnit  Float     @default(0)
+  supplierId   String?
+  supplier     Supplier? @relation(fields: [supplierId], references: [id])
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  bomItems     BomItem[]
+  movements    StockMovement[]
+}
+
+model Product {
+  id          String           @id @default(cuid())
+  name        String
+  sku         String           @unique
+  category    String // Jersey, Shorts, Tracksuit, Hoodie, Compression, Team Kit, Socks, Accessories
+  description String?
+  price       Float            @default(0)
+  costPrice   Float            @default(0)
+  imageUrl    String?
+  active      Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  variants    ProductVariant[]
+  bomItems    BomItem[]
+  orderItems  SalesOrderItem[]
+}
+
+model ProductVariant {
+  id           String           @id @default(cuid())
+  productId    String
+  product      Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  size         String // XS, S, M, L, XL, XXL or numeric
+  color        String
+  sku          String           @unique
+  stockQty     Int              @default(0)
+  reorderLevel Int              @default(10)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  orderItems   SalesOrderItem[]
+  movements    StockMovement[]
+
+  @@unique([productId, size, color])
+}
+
+// Bill of Materials: how much of a raw material goes into one unit of a product
+model BomItem {
+  id            String      @id @default(cuid())
+  productId     String
+  product       Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  rawMaterialId String
+  rawMaterial   RawMaterial @relation(fields: [rawMaterialId], references: [id])
+  qtyPerUnit    Float
+
+  @@unique([productId, rawMaterialId])
+}
+
+// Audit trail for any stock change (manual adjustment, production consumption/output, order fulfillment)
+model StockMovement {
+  id            String          @id @default(cuid())
+  type          String // RAW_MATERIAL_IN | RAW_MATERIAL_OUT | VARIANT_IN | VARIANT_OUT | ADJUSTMENT
+  quantity      Float
+  reason        String? // e.g. "Production consumption", "Manual adjustment", "Order shipped"
+  rawMaterialId String?
+  rawMaterial   RawMaterial?    @relation(fields: [rawMaterialId], references: [id])
+  variantId     String?
+  variant       ProductVariant? @relation(fields: [variantId], references: [id])
+  createdAt     DateTime        @default(now())
+}
+
+model SalesOrder {
+  id               String            @id @default(cuid())
+  orderNumber      String            @unique
+  customerId       String
+  customer         Customer          @relation(fields: [customerId], references: [id])
+  status           String            @default("PENDING") // PENDING | CONFIRMED | IN_PRODUCTION | READY_TO_SHIP | SHIPPED | DELIVERED | CANCELLED
+  orderDate        DateTime          @default(now())
+  dueDate          DateTime?
+  notes            String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  items            SalesOrderItem[]
+  productionOrders ProductionOrder[]
+  invoice          Invoice?
+}
+
+model SalesOrderItem {
+  id        String          @id @default(cuid())
+  orderId   String
+  order     SalesOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product         @relation(fields: [productId], references: [id])
+  variantId String?
+  variant   ProductVariant? @relation(fields: [variantId], references: [id])
+  quantity  Int
+  unitPrice Float
+}
+
+model ProductionOrder {
+  id               String      @id @default(cuid())
+  productionNumber String      @unique
+  salesOrderId     String?
+  salesOrder       SalesOrder? @relation(fields: [salesOrderId], references: [id])
+  productName      String // snapshot label, e.g. "Away Jersey 2026 (M, Navy)"
+  quantity         Int
+  stage            String      @default("CUTTING") // CUTTING | STITCHING | PRINTING | QUALITY_CHECK | PACKING | COMPLETED
+  status           String      @default("NOT_STARTED") // NOT_STARTED | IN_PROGRESS | COMPLETED | ON_HOLD
+  startDate        DateTime?
+  dueDate          DateTime?
+  completedDate    DateTime?
+  notes            String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+}
+
+model Invoice {
+  id            String     @id @default(cuid())
+  invoiceNumber String     @unique
+  orderId       String     @unique
+  order         SalesOrder @relation(fields: [orderId], references: [id])
+  amount        Float
+  tax           Float      @default(0)
+  totalAmount   Float
+  status        String     @default("UNPAID") // UNPAID | PARTIALLY_PAID | PAID | OVERDUE
+  issueDate     DateTime   @default(now())
+  dueDate       DateTime?
+  paidDate      DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
